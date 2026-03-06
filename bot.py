@@ -52,16 +52,16 @@ def build_monthly_message():
     blocks = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": ":rice: 이번 달 밥상머리 리더 안내", "emoji": True},
+            "text": {"type": "plain_text", "text": ":rice: 이번 달 담당자 안내", "emoji": True},
         },
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
                 "text": (
-                    f"이번 달 *{month}월* 밥상머리 리더는 "
+                    f"이번 달 *{month}월* 담당자는 "
                     f"<@{leader['userId']}>님입니다! :tada:\n"
-                    f"맛있는 회식 장소 부탁드립니다 :yum:"
+                    f"잘 부탁드립니다 :yum:"
                 ),
             },
         },
@@ -70,7 +70,7 @@ def build_monthly_message():
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*:clipboard: 전체 회식 당번 순서*\n{schedule_text}",
+                "text": f"*:clipboard: 전체 당번 순서*\n{schedule_text}",
             },
         },
         {
@@ -83,20 +83,20 @@ def build_monthly_message():
             ],
         },
     ]
-    fallback = f"{month}월 밥상머리 리더는 {leader['name']}님입니다!"
+    fallback = f"{month}월 담당자는 {leader['name']}님입니다!"
     return blocks, fallback
 
 
 def send_monthly_message():
     blocks, fallback = build_monthly_message()
     app.client.chat_postMessage(channel=CHANNEL_ID, blocks=blocks, text=fallback)
-    print(f"[{datetime.date.today()}] 월간 밥상머리 메시지 전송 완료")
+    print(f"[{datetime.date.today()}] 월간 당번 메시지 전송 완료")
 
 
 # --- 스케줄러 (매월 1일 09:00) ---
 
 def run_scheduler():
-    schedule.every().day.at("09:00").do(check_and_send)
+    schedule.every().day.at("10:00").do(check_and_send)
     while True:
         schedule.run_pending()
         time.sleep(60)
@@ -138,7 +138,7 @@ def handle_babsang(ack, command, respond):
 def cmd_show(respond):
     leaders = load_leaders()
     lines = [f"{i+1}. {l['name']} (<@{l['userId']}>)" for i, l in enumerate(leaders)]
-    respond(f":clipboard: *전체 회식 당번 순서*\n" + "\n".join(lines))
+    respond(f":clipboard: *전체 당번 순서*\n" + "\n".join(lines))
 
 
 def cmd_this_month(respond):
@@ -146,7 +146,7 @@ def cmd_this_month(respond):
     month = datetime.date.today().month
     idx = (month - 1) % len(leaders)
     leader = leaders[idx]
-    respond(f":rice: *{month}월* 밥상머리 리더는 <@{leader['userId']}> ({leader['name']})님입니다!")
+    respond(f":rice: *{month}월* 담당자는 <@{leader['userId']}> ({leader['name']})님입니다!")
 
 
 def cmd_add(text, respond):
@@ -227,7 +227,7 @@ if __name__ == "__main__":
     # 스케줄러를 백그라운드 스레드로 실행
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
-    print("Babsang bot started!")
+    print("당번봇 started!")
 
     # Socket Mode로 슬래시 커맨드 리스닝
     SocketModeHandler(app, SLACK_APP_TOKEN).start()
