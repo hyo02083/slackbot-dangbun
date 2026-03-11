@@ -13,70 +13,86 @@ load_dotenv()
 
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]
-CHANNEL_ID = os.environ["SLACK_CHANNEL_ID"]
-LEADERS_FILE = os.path.join(os.path.dirname(__file__), "leaders.json")
-CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
 app = App(token=SLACK_BOT_TOKEN)
 
 
+# --- 채널별 데이터 경로 ---
+
+def get_channel_dir(channel_id):
+    path = os.path.join(DATA_DIR, channel_id)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def leaders_file(channel_id):
+    return os.path.join(get_channel_dir(channel_id), "leaders.json")
+
+
+def config_file(channel_id):
+    return os.path.join(get_channel_dir(channel_id), "config.json")
+
+
 # --- config.json 읽기/쓰기 ---
 
-def load_config():
-    if not os.path.exists(CONFIG_FILE):
+def load_config(channel_id):
+    path = config_file(channel_id)
+    if not os.path.exists(path):
         today = datetime.date.today()
-        save_config({"start_year": today.year, "start_month": today.month})
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        save_config(channel_id, {"start_year": today.year, "start_month": today.month})
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def save_config(config):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+def save_config(channel_id, config):
+    with open(config_file(channel_id), "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=4)
 
 
 # --- leaders.json 읽기/쓰기 ---
 
-def load_leaders():
-    if not os.path.exists(LEADERS_FILE):
-        save_leaders([])
+def load_leaders(channel_id):
+    path = leaders_file(channel_id)
+    if not os.path.exists(path):
+        save_leaders(channel_id, [])
         return []
-    with open(LEADERS_FILE, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def save_leaders(leaders):
-    with open(LEADERS_FILE, "w", encoding="utf-8") as f:
+def save_leaders(channel_id, leaders):
+    with open(leaders_file(channel_id), "w", encoding="utf-8") as f:
         json.dump(leaders, f, ensure_ascii=False, indent=4)
 
 
 # --- 당번 계산 ---
 
-def get_absolute_offset():
+def get_absolute_offset(channel_id):
     """시작 시점으로부터 현재까지 몇 개월 지났는지 반환한다."""
-    config = load_config()
+    config = load_config(channel_id)
     start_year = config.get("start_year", 2026)
     start_month = config.get("start_month", 1)
     today = datetime.date.today()
     return (today.year - start_year) * 12 + (today.month - start_month)
 
 
-def get_current_duty_index(leaders):
+def get_current_duty_index(channel_id, leaders):
     """현재 월의 당번 인덱스를 반환한다."""
     if not leaders:
         return -1
-    return get_absolute_offset() % len(leaders)
+    return get_absolute_offset(channel_id) % len(leaders)
 
 
-def get_next_month_for_index(i, total):
+def get_next_month_for_index(channel_id, i, total):
     """리스트 인덱스 i번 사람의 다음 담당 연월을 반환한다. (year, month) 튜플."""
-    current_offset = get_absolute_offset()
+    current_offset = get_absolute_offset(channel_id)
     remainder = current_offset % total
     if i >= remainder:
         next_offset = current_offset + (i - remainder)
     else:
         next_offset = current_offset + (total - remainder + i)
-    config = load_config()
+    config = load_config(channel_id)
     start_year = config.get("start_year", 2026)
     start_month = config.get("start_month", 1)
     total_month = (start_month - 1) + next_offset
@@ -94,18 +110,18 @@ def format_month(year, month, total):
 
 # --- 월별 메시지 전송 ---
 
-def build_monthly_message():
-    leaders = load_leaders()
+def build_monthly_message(channel_id):
+    leaders = load_leaders(channel_id)
     if not leaders:
         return None, None
     month = datetime.date.today().month
-    idx = get_current_duty_index(leaders)
+    idx = get_current_duty_index(channel_id, leaders)
     leader = leaders[idx]
 
     total = len(leaders)
     schedule_lines = []
     for i, l in enumerate(leaders):
-        y, m = get_next_month_for_index(i, total)
+        y, m = get_next_month_for_index(channel_id, i, total)
         month_str = format_month(y, m, total)
         if i == idx:
             schedule_lines.append(f"{i+1}. :crown: *{l['name']} — {month_str} [이번달 당번]*")
@@ -167,13 +183,24 @@ def build_monthly_message():
     return blocks, fallback
 
 
-def send_monthly_message():
-    blocks, fallback = build_monthly_message()
-    if blocks is None:
-        print(f"[{datetime.date.today()}] 등록된 멤버가 없어 메시지를 보내지 않았습니다.")
+def send_monthly_message_all():
+    """등록된 모든 채널에 월간 메시지를 전송한다."""
+    if not os.path.exists(DATA_DIR):
+        print(f"[{datetime.date.today()}] 등록된 채널이 없어 메시지를 보내지 않았습니다.")
         return
-    app.client.chat_postMessage(channel=CHANNEL_ID, blocks=blocks, text=fallback)
-    print(f"[{datetime.date.today()}] 월간 당번 메시지 전송 완료")
+    for channel_id in os.listdir(DATA_DIR):
+        channel_dir = os.path.join(DATA_DIR, channel_id)
+        if not os.path.isdir(channel_dir):
+            continue
+        blocks, fallback = build_monthly_message(channel_id)
+        if blocks is None:
+            print(f"[{datetime.date.today()}] [{channel_id}] 등록된 멤버가 없어 메시지를 보내지 않았습니다.")
+            continue
+        try:
+            app.client.chat_postMessage(channel=channel_id, blocks=blocks, text=fallback)
+            print(f"[{datetime.date.today()}] [{channel_id}] 월간 당번 메시지 전송 완료")
+        except Exception as e:
+            print(f"[{datetime.date.today()}] [{channel_id}] 메시지 전송 실패: {e}")
 
 
 # --- 스케줄러 (매월 1일 10:00) ---
@@ -187,7 +214,7 @@ def run_scheduler():
 
 def check_and_send():
     if datetime.date.today().day == 1:
-        send_monthly_message()
+        send_monthly_message_all()
 
 
 # --- 슬래시 커맨드: /당번 ---
@@ -196,17 +223,18 @@ def check_and_send():
 def handle_babsang(ack, command, respond):
     ack()
     text = command.get("text", "").strip()
+    channel_id = command.get("channel_id", "")
 
     if not text or text == "조회":
-        cmd_show(respond)
+        cmd_show(channel_id, respond)
     elif text.startswith("추가"):
-        cmd_add(text, respond)
+        cmd_add(channel_id, text, respond)
     elif text.startswith("삭제"):
-        cmd_remove(text, respond)
+        cmd_remove(channel_id, text, respond)
     elif text.startswith("순서변경"):
-        cmd_reorder(text, respond)
+        cmd_reorder(channel_id, text, respond)
     elif text == "상세":
-        cmd_detail(respond)
+        cmd_detail(channel_id, respond)
     else:
         respond(
             ":question: *사용법*\n"
@@ -218,16 +246,16 @@ def handle_babsang(ack, command, respond):
         )
 
 
-def cmd_show(respond):
-    leaders = load_leaders()
+def cmd_show(channel_id, respond):
+    leaders = load_leaders(channel_id)
     if not leaders:
         respond(":clipboard: 등록된 멤버가 없습니다. `/당번 추가 이름 U슬랙ID`로 추가해주세요.")
         return
-    idx = get_current_duty_index(leaders)
+    idx = get_current_duty_index(channel_id, leaders)
     total = len(leaders)
     lines = []
     for i, l in enumerate(leaders):
-        y, m = get_next_month_for_index(i, total)
+        y, m = get_next_month_for_index(channel_id, i, total)
         month_str = format_month(y, m, total)
         if i == idx:
             lines.append(f"{i+1}. :crown: *{l['name']} — {month_str} [이번달 당번]*")
@@ -244,16 +272,16 @@ def cmd_show(respond):
     respond(f":clipboard: *전체 당번 순서*\n" + "\n".join(lines) + usage)
 
 
-def cmd_detail(respond):
-    leaders = load_leaders()
+def cmd_detail(channel_id, respond):
+    leaders = load_leaders(channel_id)
     if not leaders:
         respond(":clipboard: 등록된 멤버가 없습니다.")
         return
-    idx = get_current_duty_index(leaders)
+    idx = get_current_duty_index(channel_id, leaders)
     total = len(leaders)
     lines = []
     for i, l in enumerate(leaders):
-        y, m = get_next_month_for_index(i, total)
+        y, m = get_next_month_for_index(channel_id, i, total)
         month_str = format_month(y, m, total)
         if i == idx:
             lines.append(f"{i+1}. :crown: *{l['name']}* ({l['userId']}) — {month_str} [이번달 당번]")
@@ -262,7 +290,7 @@ def cmd_detail(respond):
     respond(f":mag: *전체 당번 상세*\n" + "\n".join(lines))
 
 
-def cmd_add(text, respond):
+def cmd_add(channel_id, text, respond):
     # /당번 추가 이름 U12345 [순서], 이름2 U67890 [순서]
     raw = text[len("추가"):].strip()
     if not raw:
@@ -270,7 +298,7 @@ def cmd_add(text, respond):
         return
 
     entries = [e.strip() for e in raw.split(",")]
-    leaders = load_leaders()
+    leaders = load_leaders(channel_id)
     added = []
 
     for entry in entries:
@@ -304,7 +332,7 @@ def cmd_add(text, respond):
 
     for i, l in enumerate(leaders):
         l["month"] = i + 1
-    save_leaders(leaders)
+    save_leaders(channel_id, leaders)
 
     if len(added) == 1:
         respond(f":white_check_mark: *{added[0]}* 님이 추가되었습니다. (현재 {len(leaders)}명)")
@@ -313,7 +341,7 @@ def cmd_add(text, respond):
         respond(f":white_check_mark: {len(added)}명이 추가되었습니다. (현재 {len(leaders)}명)\n{names_lines}")
 
 
-def cmd_remove(text, respond):
+def cmd_remove(channel_id, text, respond):
     # /당번 삭제 U슬랙ID1, U슬랙ID2, ...
     raw = text[len("삭제"):].strip()
     if not raw:
@@ -321,7 +349,7 @@ def cmd_remove(text, respond):
         return
 
     targets = [t.strip() for t in raw.split(",")]
-    leaders = load_leaders()
+    leaders = load_leaders(channel_id)
     uid_set = {l["userId"] for l in leaders}
 
     invalid = [t for t in targets if not t.startswith("U")]
@@ -345,7 +373,7 @@ def cmd_remove(text, respond):
 
     for i, l in enumerate(new_leaders):
         l["month"] = i + 1
-    save_leaders(new_leaders)
+    save_leaders(channel_id, new_leaders)
 
     if len(removed) == 1:
         respond(f":white_check_mark: *{removed[0]}* 님이 삭제되었습니다. (현재 {len(new_leaders)}명)")
@@ -354,7 +382,7 @@ def cmd_remove(text, respond):
         respond(f":white_check_mark: {len(removed)}명이 삭제되었습니다. (현재 {len(new_leaders)}명)\n{names_lines}")
 
 
-def cmd_reorder(text, respond):
+def cmd_reorder(channel_id, text, respond):
     # /당번 순서변경 김00,이00,박00,...
     parts = text.split(maxsplit=1)
     if len(parts) < 2:
@@ -362,7 +390,7 @@ def cmd_reorder(text, respond):
         return
 
     names = [n.strip() for n in parts[1].split(",")]
-    leaders = load_leaders()
+    leaders = load_leaders(channel_id)
     leader_map = {l["name"]: l for l in leaders}
 
     missing = [n for n in names if n not in leader_map]
@@ -379,14 +407,14 @@ def cmd_reorder(text, respond):
         entry = leader_map[name]
         entry["month"] = i + 1
         new_leaders.append(entry)
-    save_leaders(new_leaders)
+    save_leaders(channel_id, new_leaders)
 
     # 순서변경 시 현재 연월을 시작점으로 저장
     today = datetime.date.today()
-    config = load_config()
+    config = load_config(channel_id)
     config["start_year"] = today.year
     config["start_month"] = today.month
-    save_config(config)
+    save_config(channel_id, config)
 
     lines = [f"{i+1}. {l['name']}" for i, l in enumerate(new_leaders)]
     respond(f":white_check_mark: 순서가 변경되었습니다!\n" + "\n".join(lines))

@@ -1,5 +1,4 @@
 .env
-leaders.json
-config.json
+data/
 __pycache__/
 *.pyc
